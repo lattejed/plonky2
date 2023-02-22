@@ -1,4 +1,3 @@
-use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
@@ -13,12 +12,13 @@ use crate::gates::gate::Gate;
 use crate::gates::util::StridedConstraintConsumer;
 use crate::hash::hash_types::RichField;
 use crate::iop::ext_target::{ExtensionAlgebraTarget, ExtensionTarget};
-use crate::iop::generator::{GeneratedValues, SimpleGenerator, WitnessGenerator};
+use crate::iop::generator::{GeneratedValues, SimpleGenerator, WitnessGeneratorRef};
 use crate::iop::target::Target;
 use crate::iop::wire::Wire;
 use crate::iop::witness::{PartitionWitness, Witness, WitnessWrite};
 use crate::plonk::circuit_builder::CircuitBuilder;
 use crate::plonk::vars::{EvaluationTargets, EvaluationVars, EvaluationVarsBase};
+use crate::util::serialization::{Buffer, IoResult, Read, Write};
 
 /// One of the instantiations of `InterpolationGate`: allows constraints of variable
 /// degree, up to `1<<subgroup_bits`.
@@ -166,6 +166,26 @@ impl<F: RichField + Extendable<D>, const D: usize> CosetInterpolationGate<F, D> 
 impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for CosetInterpolationGate<F, D> {
     fn id(&self) -> String {
         format!("{self:?}<D={D}>")
+    }
+
+    fn serialize(&self, dst: &mut Vec<u8>) -> IoResult<()> {
+        dst.write_usize(self.subgroup_bits)?;
+        dst.write_usize(self.degree)?;
+        dst.write_usize(self.barycentric_weights.len())?;
+        dst.write_field_vec(&self.barycentric_weights)
+    }
+
+    fn deserialize(src: &mut Buffer) -> IoResult<Self> {
+        let subgroup_bits = src.read_usize()?;
+        let degree = src.read_usize()?;
+        let length = src.read_usize()?;
+        let barycentric_weights: Vec<F> = src.read_field_vec(length)?;
+        Ok(Self {
+            subgroup_bits,
+            degree,
+            barycentric_weights,
+            _phantom: PhantomData,
+        })
     }
 
     fn eval_unfiltered(&self, vars: EvaluationVars<F, D>) -> Vec<F::Extension> {
@@ -342,9 +362,9 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for CosetInterpola
         constraints
     }
 
-    fn generators(&self, row: usize, _local_constants: &[F]) -> Vec<Box<dyn WitnessGenerator<F>>> {
+    fn generators(&self, row: usize, _local_constants: &[F]) -> Vec<WitnessGeneratorRef<F>> {
         let gen = InterpolationGenerator::<F, D>::new(row, self.clone());
-        vec![Box::new(gen.adapter())]
+        vec![WitnessGeneratorRef::new(gen.adapter())]
     }
 
     fn num_wires(&self) -> usize {
@@ -367,11 +387,22 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for CosetInterpola
 }
 
 #[derive(Debug)]
-struct InterpolationGenerator<F: RichField + Extendable<D>, const D: usize> {
+pub(crate) struct InterpolationGenerator<F: RichField + Extendable<D>, const D: usize> {
     row: usize,
     gate: CosetInterpolationGate<F, D>,
     interpolation_domain: Vec<F>,
     _phantom: PhantomData<F>,
+}
+
+impl<F: RichField + Extendable<D>, const D: usize> Default for InterpolationGenerator<F, D> {
+    fn default() -> Self {
+        Self {
+            row: 0,
+            gate: CosetInterpolationGate::new(1),
+            interpolation_domain: vec![],
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<F: RichField + Extendable<D>, const D: usize> InterpolationGenerator<F, D> {
@@ -389,6 +420,10 @@ impl<F: RichField + Extendable<D>, const D: usize> InterpolationGenerator<F, D> 
 impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F>
     for InterpolationGenerator<F, D>
 {
+    fn id(&self) -> String {
+        "InterpolationGenerator".to_string()
+    }
+
     fn dependencies(&self) -> Vec<Target> {
         let local_target = |column| {
             Target::Wire(Wire {
@@ -470,6 +505,17 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F>
 
         let evaluation_value_wires = self.gate.wires_evaluation_value().map(local_wire);
         out_buffer.set_ext_wires(evaluation_value_wires, computed_eval);
+    }
+
+    fn serialize(&self, dst: &mut Vec<u8>) -> IoResult<()> {
+        dst.write_usize(self.row)?;
+        self.gate.serialize(dst)
+    }
+
+    fn deserialize(src: &mut Buffer) -> IoResult<Self> {
+        let row = src.read_usize()?;
+        let gate = CosetInterpolationGate::deserialize(src)?;
+        Ok(Self::new(row, gate))
     }
 }
 

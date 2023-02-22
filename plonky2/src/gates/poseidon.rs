@@ -1,4 +1,3 @@
-use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
@@ -14,12 +13,13 @@ use crate::hash::hashing::SPONGE_WIDTH;
 use crate::hash::poseidon;
 use crate::hash::poseidon::Poseidon;
 use crate::iop::ext_target::ExtensionTarget;
-use crate::iop::generator::{GeneratedValues, SimpleGenerator, WitnessGenerator};
+use crate::iop::generator::{GeneratedValues, SimpleGenerator, WitnessGeneratorRef};
 use crate::iop::target::Target;
 use crate::iop::wire::Wire;
 use crate::iop::witness::{PartitionWitness, Witness, WitnessWrite};
 use crate::plonk::circuit_builder::CircuitBuilder;
 use crate::plonk::vars::{EvaluationTargets, EvaluationVars, EvaluationVarsBase};
+use crate::util::serialization::{Buffer, IoResult, Read, Write};
 
 /// Evaluates a full Poseidon permutation with 12 state elements.
 ///
@@ -98,6 +98,14 @@ impl<F: RichField + Extendable<D>, const D: usize> PoseidonGate<F, D> {
 impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for PoseidonGate<F, D> {
     fn id(&self) -> String {
         format!("{self:?}<WIDTH={SPONGE_WIDTH}>")
+    }
+
+    fn serialize(&self, _dst: &mut Vec<u8>) -> IoResult<()> {
+        Ok(())
+    }
+
+    fn deserialize(_src: &mut Buffer) -> IoResult<Self> {
+        Ok(PoseidonGate::new())
     }
 
     fn eval_unfiltered(&self, vars: EvaluationVars<F, D>) -> Vec<F::Extension> {
@@ -373,12 +381,12 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for PoseidonGate<F
         constraints
     }
 
-    fn generators(&self, row: usize, _local_constants: &[F]) -> Vec<Box<dyn WitnessGenerator<F>>> {
+    fn generators(&self, row: usize, _local_constants: &[F]) -> Vec<WitnessGeneratorRef<F>> {
         let gen = PoseidonGenerator::<F, D> {
             row,
             _phantom: PhantomData,
         };
-        vec![Box::new(gen.adapter())]
+        vec![WitnessGeneratorRef::new(gen.adapter())]
     }
 
     fn num_wires(&self) -> usize {
@@ -403,14 +411,27 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for PoseidonGate<F
 }
 
 #[derive(Debug)]
-struct PoseidonGenerator<F: RichField + Extendable<D> + Poseidon, const D: usize> {
+pub(crate) struct PoseidonGenerator<F: RichField + Extendable<D> + Poseidon, const D: usize> {
     row: usize,
     _phantom: PhantomData<F>,
+}
+
+impl<F: RichField + Extendable<D> + Poseidon, const D: usize> Default for PoseidonGenerator<F, D> {
+    fn default() -> Self {
+        Self {
+            row: 0,
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<F: RichField + Extendable<D> + Poseidon, const D: usize> SimpleGenerator<F>
     for PoseidonGenerator<F, D>
 {
+    fn id(&self) -> String {
+        "PoseidonGenerator".to_string()
+    }
+
     fn dependencies(&self) -> Vec<Target> {
         (0..SPONGE_WIDTH)
             .map(|i| PoseidonGate::<F, D>::wire_input(i))
@@ -499,6 +520,18 @@ impl<F: RichField + Extendable<D> + Poseidon, const D: usize> SimpleGenerator<F>
         for i in 0..SPONGE_WIDTH {
             out_buffer.set_wire(local_wire(PoseidonGate::<F, D>::wire_output(i)), state[i]);
         }
+    }
+
+    fn serialize(&self, dst: &mut Vec<u8>) -> IoResult<()> {
+        dst.write_usize(self.row)
+    }
+
+    fn deserialize(src: &mut Buffer) -> IoResult<Self> {
+        let row = src.read_usize()?;
+        Ok(Self {
+            row,
+            _phantom: PhantomData,
+        })
     }
 }
 

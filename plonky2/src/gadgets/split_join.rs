@@ -9,6 +9,7 @@ use crate::iop::target::{BoolTarget, Target};
 use crate::iop::witness::{PartitionWitness, Witness, WitnessWrite};
 use crate::plonk::circuit_builder::CircuitBuilder;
 use crate::util::ceil_div_usize;
+use crate::util::serialization::{Buffer, IoResult, Read, Write};
 
 impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilder<F, D> {
     /// Split the given integer into a list of wires, where each one represents a
@@ -56,12 +57,25 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilder<F, D> {
 }
 
 #[derive(Debug)]
-struct SplitGenerator {
+pub(crate) struct SplitGenerator {
     integer: Target,
     bits: Vec<Target>,
 }
 
+impl Default for SplitGenerator {
+    fn default() -> Self {
+        Self {
+            integer: Target::VirtualTarget { index: 0 },
+            bits: vec![],
+        }
+    }
+}
+
 impl<F: RichField> SimpleGenerator<F> for SplitGenerator {
+    fn id(&self) -> String {
+        "SplitGenerator".to_string()
+    }
+
     fn dependencies(&self) -> Vec<Target> {
         vec![self.integer]
     }
@@ -80,16 +94,41 @@ impl<F: RichField> SimpleGenerator<F> for SplitGenerator {
             "Integer too large to fit in given number of bits"
         );
     }
+
+    fn serialize(&self, dst: &mut Vec<u8>) -> IoResult<()> {
+        dst.write_target(self.integer)?;
+        dst.write_target_vec(&self.bits)
+    }
+
+    fn deserialize(src: &mut Buffer) -> IoResult<Self> {
+        let integer = src.read_target()?;
+        let bits = src.read_target_vec()?;
+        Ok(Self { integer, bits })
+    }
 }
 
 #[derive(Debug)]
-struct WireSplitGenerator {
+pub(crate) struct WireSplitGenerator {
     integer: Target,
     gates: Vec<usize>,
     num_limbs: usize,
 }
 
+impl Default for WireSplitGenerator {
+    fn default() -> Self {
+        Self {
+            integer: Target::VirtualTarget { index: 0 },
+            gates: vec![],
+            num_limbs: 0,
+        }
+    }
+}
+
 impl<F: RichField> SimpleGenerator<F> for WireSplitGenerator {
+    fn id(&self) -> String {
+        "WireSplitGenerator".to_string()
+    }
+
     fn dependencies(&self) -> Vec<Target> {
         vec![self.integer]
     }
@@ -119,5 +158,22 @@ impl<F: RichField> SimpleGenerator<F> for WireSplitGenerator {
             "Integer too large to fit in {} many `BaseSumGate`s",
             self.gates.len()
         );
+    }
+
+    fn serialize(&self, dst: &mut Vec<u8>) -> IoResult<()> {
+        dst.write_target(self.integer)?;
+        dst.write_usize_vec(&self.gates)?;
+        dst.write_usize(self.num_limbs)
+    }
+
+    fn deserialize(src: &mut Buffer) -> IoResult<Self> {
+        let integer = src.read_target()?;
+        let gates = src.read_usize_vec()?;
+        let num_limbs = src.read_usize()?;
+        Ok(Self {
+            integer,
+            gates,
+            num_limbs,
+        })
     }
 }

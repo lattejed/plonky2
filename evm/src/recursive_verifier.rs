@@ -18,7 +18,10 @@ use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::plonk::circuit_data::{CircuitConfig, CircuitData, VerifierCircuitData};
 use plonky2::plonk::config::{AlgebraicHasher, GenericConfig, Hasher};
 use plonky2::plonk::proof::{ProofWithPublicInputs, ProofWithPublicInputsTarget};
+use plonky2::util::gate_serialization::GateSerializer;
+use plonky2::util::generator_serialization::WitnessGeneratorSerializer;
 use plonky2::util::reducing::ReducingFactorTarget;
+use plonky2::util::serialization::{Buffer, IoResult, Read, Write};
 use plonky2::with_context;
 use plonky2_util::log2_ceil;
 
@@ -147,6 +150,7 @@ impl<F: RichField + Extendable<D>, C: GenericConfig<D, F = F>, const D: usize>
 }
 
 /// Represents a circuit which recursively verifies a STARK proof.
+#[derive(Eq, PartialEq, Debug)]
 pub(crate) struct StarkWrapperCircuit<F, C, const D: usize>
 where
     F: RichField + Extendable<D>,
@@ -165,6 +169,39 @@ where
     C: GenericConfig<D, F = F>,
     C::Hasher: AlgebraicHasher<F>,
 {
+    pub fn to_buffer(
+        &self,
+        buffer: &mut Vec<u8>,
+        gate_serializer: &dyn GateSerializer<F, D>,
+        generator_serializer: &dyn WitnessGeneratorSerializer<F, D>,
+    ) -> IoResult<()> {
+        buffer.write_circuit_data(&self.circuit, gate_serializer, generator_serializer)?;
+        buffer.write_target_vec(&self.init_challenger_state_target)?;
+        buffer.write_target(self.zero_target)?;
+        self.stark_proof_target.to_buffer(buffer)?;
+        self.ctl_challenges_target.to_buffer(buffer)?;
+        Ok(())
+    }
+
+    pub fn from_buffer(
+        buffer: &mut Buffer,
+        gate_serializer: &dyn GateSerializer<F, D>,
+        generator_serializer: &dyn WitnessGeneratorSerializer<F, D>,
+    ) -> IoResult<Self> {
+        let circuit = buffer.read_circuit_data(gate_serializer, generator_serializer)?;
+        let init_challenger_state_target = buffer.read_target_vec()?;
+        let zero_target = buffer.read_target()?;
+        let stark_proof_target = StarkProofTarget::from_buffer(buffer)?;
+        let ctl_challenges_target = GrandProductChallengeSet::from_buffer(buffer)?;
+        Ok(Self {
+            circuit,
+            stark_proof_target,
+            ctl_challenges_target,
+            init_challenger_state_target: init_challenger_state_target.try_into().unwrap(),
+            zero_target,
+        })
+    }
+
     pub(crate) fn prove(
         &self,
         proof_with_metadata: &StarkProofWithMetadata<F, C, D>,
@@ -199,6 +236,7 @@ where
 }
 
 /// Represents a circuit which recursively verifies a PLONK proof.
+#[derive(Eq, PartialEq, Debug)]
 pub(crate) struct PlonkWrapperCircuit<F, C, const D: usize>
 where
     F: RichField + Extendable<D>,
