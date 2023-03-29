@@ -47,7 +47,7 @@ fn main() -> Result<()> {
     let circuit_data = builder.build::<C>();
     let proof = circuit_data.prove(pw.clone())?;
     println!(
-        "{}th Fibonacci number mod |F| (starting with {}, {}) is: {}",
+        "{}th Fibonacci number mod |F| (starting with {}, {}) is: {} (in memory circuit)",
         count, proof.public_inputs[0], proof.public_inputs[1], proof.public_inputs[2]
     );
     circuit_data.verify(proof)?;
@@ -92,7 +92,7 @@ fn main() -> Result<()> {
 
     let proof = circuit_data_from_bytes.prove(pw)?;
     println!(
-        "{}th Fibonacci number mod |F| (starting with {}, {}) is: {}",
+        "{}th Fibonacci number mod |F| (starting with {}, {}) is: {} (deserialized circuit)",
         count, proof.public_inputs[0], proof.public_inputs[1], proof.public_inputs[2]
     );
     circuit_data_from_bytes.verify(proof)?;
