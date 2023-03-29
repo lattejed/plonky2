@@ -54,35 +54,24 @@ fn main() -> Result<()> {
 
     // Serialize circuit
     let gate_serializer = DefaultGateSerializer;
-    // TODO: Add a ctor for this
-    let generator_serializer = DefaultGeneratorSerializer {
-        _phantom: std::marker::PhantomData::<C>,
-    };
+    let generator_serializer = DefaultGeneratorSerializer::<C, D>::new();
 
     let circuit_data_bytes = circuit_data
         .to_bytes(&gate_serializer, &generator_serializer)
         .map_err(|_| anyhow::Error::msg("CircuitData serialization failed."))?;
 
-    // TODO:
-    #[derive(serde::Serialize, serde::Deserialize)]
-    struct SerializedCircuitData {
-        circuit_data: Vec<u8>,
-    }
-
-    let serialized_circuit_data = SerializedCircuitData {
-        circuit_data: circuit_data_bytes,
-    };
-    let json_str = serde_json::to_string(&serialized_circuit_data)?;
-
+    // Round trip to disk
+    let json_str = serde_json::to_string(&circuit_data_bytes)?;
     let temp_file = tempfile::NamedTempFile::new()?;
     let temp_file = temp_file.path();
 
     fs::write(temp_file, json_str)?;
     let json_bytes = fs::read(temp_file)?;
-    let serialized_circuit_data: SerializedCircuitData = serde_json::from_slice(&json_bytes)?;
+    let serialized_circuit_data: Vec<u8> = serde_json::from_slice(&json_bytes)?;
 
+    // Deserialize circuit
     let circuit_data_from_bytes = CircuitData::<F, C, D>::from_bytes(
-        &serialized_circuit_data.circuit_data,
+        &serialized_circuit_data,
         &gate_serializer,
         &generator_serializer,
     )
@@ -90,6 +79,7 @@ fn main() -> Result<()> {
 
     assert_eq!(&circuit_data, &circuit_data_from_bytes);
 
+    // Gen proof and verify again
     let proof = circuit_data_from_bytes.prove(pw)?;
     println!(
         "{}th Fibonacci number mod |F| (starting with {}, {}) is: {} (deserialized circuit)",
