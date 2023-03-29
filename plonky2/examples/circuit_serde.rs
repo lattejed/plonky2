@@ -4,9 +4,10 @@ use anyhow::Result;
 use plonky2::field::types::Field;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
-use plonky2::plonk::circuit_data::{CircuitConfig, CommonCircuitData};
+use plonky2::plonk::circuit_data::{CircuitConfig, CircuitData};
 use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
 use plonky2::util::gate_serialization::default::DefaultGateSerializer;
+use plonky2::util::generator_serialization::default::DefaultGeneratorSerializer;
 #[cfg(test)]
 use tempfile;
 
@@ -43,31 +44,33 @@ fn main() -> Result<()> {
     pw.set_target(initial_b, F::ONE);
 
     // Ciruit, proof & verification
-    let data = builder.build::<C>();
-    let proof = data.prove(pw)?;
+    let circuit_data = builder.build::<C>();
+    let proof = circuit_data.prove(pw.clone())?;
     println!(
         "{}th Fibonacci number mod |F| (starting with {}, {}) is: {}",
         count, proof.public_inputs[0], proof.public_inputs[1], proof.public_inputs[2]
     );
-    data.verify(proof)?;
+    circuit_data.verify(proof)?;
 
     // Serialize circuit
-    let common_data = &data.common;
-    // let circuit_digest = &data.verifier_only.circuit_digest;
     let gate_serializer = DefaultGateSerializer;
+    // TODO: Add a ctor for this
+    let generator_serializer = DefaultGeneratorSerializer {
+        _phantom: std::marker::PhantomData::<C>,
+    };
 
-    let common_data_bytes = common_data
-        .to_bytes(&gate_serializer)
-        .map_err(|_| anyhow::Error::msg("CommonCircuitData serialization failed."))?;
+    let circuit_data_bytes = circuit_data
+        .to_bytes(&gate_serializer, &generator_serializer)
+        .map_err(|_| anyhow::Error::msg("CircuitData serialization failed."))?;
 
     // TODO:
     #[derive(serde::Serialize, serde::Deserialize)]
     struct SerializedCircuitData {
-        common_circuit_data: Vec<u8>,
+        circuit_data: Vec<u8>,
     }
 
     let serialized_circuit_data = SerializedCircuitData {
-        common_circuit_data: common_data_bytes,
+        circuit_data: circuit_data_bytes,
     };
     let json_str = serde_json::to_string(&serialized_circuit_data)?;
 
@@ -78,13 +81,21 @@ fn main() -> Result<()> {
     let json_bytes = fs::read(temp_file)?;
     let serialized_circuit_data: SerializedCircuitData = serde_json::from_slice(&json_bytes)?;
 
-    let common_data_from_bytes = CommonCircuitData::<F, D>::from_bytes(
-        serialized_circuit_data.common_circuit_data,
+    let circuit_data_from_bytes = CircuitData::<F, C, D>::from_bytes(
+        &serialized_circuit_data.circuit_data,
         &gate_serializer,
+        &generator_serializer,
     )
     .map_err(|_| anyhow::Error::msg("CommonCircuitData deserialization failed."))?;
 
-    assert_eq!(common_data, &common_data_from_bytes);
+    assert_eq!(&circuit_data, &circuit_data_from_bytes);
+
+    let proof = circuit_data_from_bytes.prove(pw)?;
+    println!(
+        "{}th Fibonacci number mod |F| (starting with {}, {}) is: {}",
+        count, proof.public_inputs[0], proof.public_inputs[1], proof.public_inputs[2]
+    );
+    circuit_data_from_bytes.verify(proof)?;
 
     Ok(())
 }
