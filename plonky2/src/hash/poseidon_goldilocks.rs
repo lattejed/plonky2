@@ -1,3 +1,7 @@
+#![allow(
+    unused_imports, 
+    dead_code
+)]
 //! Implementations for Poseidon over Goldilocks field of widths 8 and 12.
 //!
 //! These contents of the implementations *must* be generated using the
